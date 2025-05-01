@@ -113,7 +113,7 @@ func main() {
 
 	// In lỗi nếu có
 	for err := range errorChan {
-		log.Println("Lỗi:", err)
+		log.Println("Error:", err)
 	}
 
 	fmt.Println("Dữ liệu đã được cập nhật thành công.")
