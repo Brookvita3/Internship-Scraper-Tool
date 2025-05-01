@@ -3,20 +3,19 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"scarpe-intern/models"
 	"scarpe-intern/utils"
 	"sync"
 )
 
 // Đường dẫn API
-const (
-	listCompanyURL    = "https://internship.cse.hcmut.edu.vn/home/company/all?condition="
-	companyDetailsURL = "https://internship.cse.hcmut.edu.vn/home/company/id"
-	baseURL           = "https://internship.cse.hcmut.edu.vn"
+var (
+	listCompanyURL    string
+	companyDetailsURL string
 )
 
 // Hàm lấy danh sách ID từ URL đầu tiên
@@ -51,71 +50,34 @@ func getCompanyDetailsWorker(ids <-chan string, errChan chan<- error, wg *sync.W
 	defer wg.Done()
 
 	for id := range ids {
-		url := companyDetailsURL + "/" + id
-		res, err := http.Get(url)
+
+		// Fetch thông tin chi tiết công ty
+		company, err := utils.FetchCompanyDetails(companyDetailsURL + "/" + id)
 		if err != nil {
-			errChan <- err
-			continue
-		}
-		defer res.Body.Close()
-
-		if res.StatusCode != 200 {
-			errChan <- fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
+			errChan <- fmt.Errorf("failed to fetch company details for %s: %v", id, err)
 			continue
 		}
 
-		var response map[string]any
-		if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
-			errChan <- err
-			continue
-		}
-
-		item := response["item"].(map[string]any)
-		company := models.CompanyDetails{
-			Fullname:               item["fullname"].(string),
-			MaxAcceptedStudent:     int(item["maxAcceptedStudent"].(float64)),
-			StudentRegister:        int(item["studentRegister"].(float64)),
-			StudentAccepted:        int(item["studentAccepted"].(float64)),
-			SubscribeAcceptedEmail: item["subscribeAcceptedEmail"].(bool),
-			MaxRegister:            int(item["maxRegister"].(float64)),
-		}
-
-		if filesRaw, ok := item["internshipFiles"].([]any); ok {
-			for _, f := range filesRaw {
-				fileMap := f.(map[string]any)
-				company.InternshipFiles = append(company.InternshipFiles, models.InternshipFile{
-					Name: fileMap["name"].(string),
-					Path: fileMap["path"].(string),
-				})
-			}
-		}
-
-		// Chỉ lấy những công ty có điều kiện
-		if company.SubscribeAcceptedEmail &&
-			company.StudentRegister < company.MaxRegister &&
-			company.StudentAccepted < company.MaxAcceptedStudent {
-
-			// Tạo thư mục theo tên công ty
-			folderName := utils.SanitizeFolderName(company.Fullname)
-			dirPath := filepath.Join("company", folderName)
-			if err := os.MkdirAll(dirPath, 0755); err != nil {
-				errChan <- fmt.Errorf("failed to create folder for %s: %v", company.Fullname, err)
-				continue
-			}
-
-			// Tải các file
-			for _, file := range company.InternshipFiles {
-				fileURL := baseURL + file.Path
-				destPath := filepath.Join(dirPath, file.Name)
-				if err := utils.DownloadFile(fileURL, destPath); err != nil {
-					errChan <- fmt.Errorf("failed to download file %s: %v", fileURL, err)
-				}
-			}
+		// Tạo thư mục cho công ty thõa mãn điều kiện
+		if utils.IsAvailable(company) {
+			utils.SaveInfoCompany(company, errChan)
 		}
 	}
 }
 
 func main() {
+
+	err := os.RemoveAll("company")
+	if err != nil {
+		log.Fatalf("Error removing directory: %v", err)
+	}
+
+	err = godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+	listCompanyURL = os.Getenv("LIST_COMPANY_URL")
+	companyDetailsURL = os.Getenv("COMPANY_DETAILS_URL")
 
 	// Lấy danh sách ID
 	ids, err := getCompanyIDs()
@@ -136,7 +98,7 @@ func main() {
 
 	// Gửi ID vào channel
 	go func() {
-		for _, id := range ids[:] { // ví dụ chỉ lấy 10 ID đầu tiên
+		for _, id := range ids[:] {
 			idsChan <- id
 		}
 		close(idsChan)
