@@ -80,8 +80,7 @@ func fetchCompanyDetails(url string) (models.CompanyDetails, error) {
 }
 
 func isAvailable(company models.CompanyDetails) bool {
-	if company.SubscribeAcceptedEmail &&
-		company.StudentRegister < company.MaxRegister &&
+	if company.StudentRegister < company.MaxRegister &&
 		company.StudentAccepted < company.MaxAcceptedStudent {
 		return true
 	}
