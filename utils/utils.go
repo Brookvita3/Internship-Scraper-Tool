@@ -9,6 +9,7 @@ import (
 	"os"
 	"scarpe-intern/models"
 	"strings"
+	"sync"
 )
 
 // Thay thế ký tự không hợp lệ
@@ -39,7 +40,7 @@ func downloadFile(url string, dest string) error {
 	return err
 }
 
-func FetchCompanyDetails(url string) (models.CompanyDetails, error) {
+func fetchCompanyDetails(url string) (models.CompanyDetails, error) {
 	res, err := http.Get(url)
 	if err != nil {
 		return models.CompanyDetails{}, err
@@ -78,7 +79,7 @@ func FetchCompanyDetails(url string) (models.CompanyDetails, error) {
 	return company, nil
 }
 
-func IsAvailable(company models.CompanyDetails) bool {
+func isAvailable(company models.CompanyDetails) bool {
 	if company.SubscribeAcceptedEmail &&
 		company.StudentRegister < company.MaxRegister &&
 		company.StudentAccepted < company.MaxAcceptedStudent {
@@ -87,7 +88,7 @@ func IsAvailable(company models.CompanyDetails) bool {
 	return false
 }
 
-func SaveInfoCompany(company models.CompanyDetails, errChan chan<- error) {
+func saveInfoCompany(company models.CompanyDetails, errChan chan<- error) {
 	// Tạo thư mục theo tên công ty
 	folderName := sanitizeFolderName(company.Fullname)
 	dirPath := "company/" + folderName
@@ -103,6 +104,54 @@ func SaveInfoCompany(company models.CompanyDetails, errChan chan<- error) {
 		destPath := dirPath + "/" + file.Name
 		if err := downloadFile(fileURL, destPath); err != nil {
 			errChan <- fmt.Errorf("failed to download file %s: %v", file.Name, err)
+		}
+	}
+}
+
+// Hàm lấy danh sách ID từ URL đầu tiên
+func GetCompanyIDs() ([]string, error) {
+	listCompanyURL := os.Getenv("LIST_COMPANY_URL")
+	res, err := http.Get(listCompanyURL)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
+	}
+
+	var response map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+
+	var ids []string
+
+	items := response["items"].([]any)
+	for _, item := range items {
+		id := item.(map[string]any)["_id"].(string)
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}
+
+func GetCompanyDetailsWorker(ids <-chan string, errChan chan<- error, wg *sync.WaitGroup) {
+	defer wg.Done()
+	companyDetailsURL := os.Getenv("COMPANY_DETAILS_URL")
+	for id := range ids {
+
+		// Fetch thông tin chi tiết công ty
+		company, err := fetchCompanyDetails(companyDetailsURL + "/" + id)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to fetch company details for %s: %v", id, err)
+			continue
+		}
+
+		// Tạo thư mục cho công ty thõa mãn điều kiện
+		if isAvailable(company) {
+			saveInfoCompany(company, errChan)
 		}
 	}
 }
